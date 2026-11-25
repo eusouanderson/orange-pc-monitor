@@ -1,6 +1,6 @@
 [package]
 name = "orange-pc-monitor"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Orange Engineering Team <eusouanderson@outlook.com>"]
 edition = "2021"
 description = "Ultra Low-Resource System Hardware & OS HUD by Orange Framework"
