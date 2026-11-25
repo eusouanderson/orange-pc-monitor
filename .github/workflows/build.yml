@@ -1,0 +1,159 @@
+name: Build & Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publicar release no GitHub?"
+        required: false
+        type: boolean
+        default: false
+      tag_name:
+        description: "Nome da Tag / Versão para Release (ex: v0.1.0 - opcional se já estiver em uma tag)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    name: Check & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libgl1-mesa-dev
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo dependencies
+        uses: swatinem/rust-cache@v2
+
+      - name: Run cargo check
+        run: cargo check --verbose
+
+      - name: Run unit & integration tests
+        run: cargo test --verbose
+
+      - name: Run Clippy Linter
+        run: cargo clippy --all-targets -- -W clippy::all
+        continue-on-error: true
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: orange-pc-monitor-linux-x86_64
+            bin_path: target/x86_64-unknown-linux-gnu/release/orange-pc-monitor
+            archive_name: orange-pc-monitor-linux-x86_64.tar.gz
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: orange-pc-monitor-windows-x86_64
+            bin_path: target/x86_64-pc-windows-msvc/release/orange-pc-monitor.exe
+            archive_name: orange-pc-monitor-windows-x86_64.zip
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libgl1-mesa-dev
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build Release Binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package Release (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cp ${{ matrix.bin_path }} ./orange-pc-monitor
+          tar -czvf ${{ matrix.archive_name }} orange-pc-monitor README.md
+          sha256sum ${{ matrix.archive_name }} > ${{ matrix.archive_name }}.sha256
+
+      - name: Package Release (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item -Path "${{ matrix.bin_path }}" -Destination "./orange-pc-monitor.exe"
+          Compress-Archive -Path "./orange-pc-monitor.exe", "README.md" -DestinationPath "${{ matrix.archive_name }}"
+          $hash = (Get-FileHash "${{ matrix.archive_name }}" -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ matrix.archive_name }}" | Out-File -Encoding ascii "${{ matrix.archive_name }}.sha256"
+
+      - name: Upload Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.archive_name }}
+            ${{ matrix.archive_name }}.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-dist
+          merge-multiple: true
+
+      - name: List downloaded release assets
+        run: ls -la release-dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag_name != '' && inputs.tag_name || github.ref_name }}
+          files: |
+            release-dist/*.tar.gz
+            release-dist/*.zip
+            release-dist/*.sha256
+          generate_release_notes: true
+          draft: false
+          prerelease: false
