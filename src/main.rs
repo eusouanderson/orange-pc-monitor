@@ -228,6 +228,10 @@ fn run_gui(engine: Arc<TelemetryEngine>, config: AppConfig, initial_mode: HudVie
         .with_transparent(true)
         .with_resizable(true);
 
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) {
+        viewport = viewport.with_icon(icon);
+    }
+
     if config.always_on_top {
         viewport = viewport.with_always_on_top();
     }
